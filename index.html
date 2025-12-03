@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monthly Promotion Review</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Monthly Promotion Review</h1>
+            <p>Analyze promotion performance and member participation</p>
+        </header>
+
+        <section class="upload-section">
+            <div class="upload-grid">
+                <div class="upload-card">
+                    <h2>1. Upload Promotion Data</h2>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+                    <button id="processBtn" disabled>Process Data</button>
+                    <div id="fileStatus"></div>
+                </div>
+                
+                <div class="upload-card">
+                    <h2>2. Upload Baseline Data (Optional)</h2>
+                    <p class="upload-hint">Upload historical sales data to calculate extra sales</p>
+                    <input type="file" id="baselineInput" accept=".xlsx,.xls,.csv" />
+                    <button id="processBaselineBtn" disabled>Process Baseline</button>
+                    <div id="baselineStatus"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="resultsSection" style="display: none;">
+            <div id="baselineConfig" class="baseline-config" style="display: none;">
+                <h2>Baseline Period Configuration</h2>
+                <div class="config-controls">
+                    <div class="config-group">
+                        <label for="baselineStartDate">Baseline Start Date:</label>
+                        <input type="date" id="baselineStartDate" />
+                    </div>
+                    <div class="config-group">
+                        <label for="baselineEndDate">Baseline End Date:</label>
+                        <input type="date" id="baselineEndDate" />
+                    </div>
+                    <button id="calculateExtraSalesBtn">Calculate Extra Sales</button>
+                </div>
+                <div id="baselineInfo" class="baseline-info"></div>
+            </div>
+            
+            <div class="summary-cards">
+                <div class="stat-card">
+                    <h3>Total Promotions</h3>
+                    <div class="stat-value" id="totalPromotions">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Transactions</h3>
+                    <div class="stat-value" id="totalTransactions">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Revenue</h3>
+                    <div class="stat-value" id="totalRevenue">$0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Discount</h3>
+                    <div class="stat-value" id="totalDiscount">$0</div>
+                </div>
+            </div>
+            
+            <div id="extraSalesSection" class="extra-sales-section" style="display: none;">
+                <h2>Extra Sales Analysis</h2>
+                <div class="summary-cards">
+                    <div class="stat-card highlight">
+                        <h3>Extra Sales</h3>
+                        <div class="stat-value" id="extraSales">$0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Promotion Revenue</h3>
+                        <div class="stat-value" id="promoRevenue">$0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Baseline Revenue</h3>
+                        <div class="stat-value" id="baselineRevenue">$0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Uplift %</h3>
+                        <div class="stat-value" id="upliftPercent">0%</div>
+                    </div>
+                </div>
+                
+                <div class="extra-sales-by-promo">
+                    <h3>Extra Sales by Promotion</h3>
+                    <div class="table-wrapper">
+                        <table id="extraSalesTable">
+                            <thead>
+                                <tr>
+                                    <th>Promotion ID</th>
+                                    <th>Description</th>
+                                    <th>Promo Qty</th>
+                                    <th>Baseline Qty</th>
+                                    <th>Extra Qty</th>
+                                    <th>Promo Revenue</th>
+                                    <th>Baseline Revenue</th>
+                                    <th>Extra Sales</th>
+                                    <th>Uplift %</th>
+                                    <th>ROI</th>
+                                </tr>
+                            </thead>
+                            <tbody id="extraSalesTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="charts-grid">
+                <div class="chart-section">
+                    <div class="chart-header">
+                        <h2>Member Type Distribution</h2>
+                        <div class="filter-group">
+                            <label for="promotionFilter">Filter by Promotion:</label>
+                            <select id="promotionFilter">
+                                <option value="all">All Promotions</option>
+                            </select>
+                        </div>
+                    </div>
+                    <canvas id="memberChart"></canvas>
+                    <div id="chartStats" class="chart-stats"></div>
+                </div>
+
+                <div class="chart-section">
+                    <div class="chart-header">
+                        <h2>Store Performance</h2>
+                    </div>
+                    <canvas id="storeChart"></canvas>
+                    <div id="storeStats" class="chart-stats"></div>
+                </div>
+            </div>
+
+            <div class="table-section">
+                <h2>Promotion Performance Details</h2>
+                <div class="table-controls">
+                    <input type="text" id="searchInput" placeholder="Search promotions..." />
+                    <button id="exportBtn">Export to Excel</button>
+                </div>
+                <div class="table-wrapper">
+                    <table id="promotionTable">
+                        <thead>
+                            <tr>
+                                <th>Promotion ID</th>
+                                <th>Description</th>
+                                <th>New Members</th>
+                                <th>Existing Members</th>
+                                <th>Total Customers</th>
+                                <th>Qty Sold</th>
+                                <th>Revenue</th>
+                                <th>Discount</th>
+                                <th>Discount %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="promotionTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
