@@ -28,7 +28,8 @@ const columnMappings = {
     amtSold: ['amt sold', 'amount', 'revenue', 'sales', 'xf_amtsold'],
     promLess: ['prom less', 'discount', 'promotion discount'],
     ttlSellPrice: ['ttl sell price', 'sell price', 'selling price'],
-    ttlOrgPrice: ['ttl org price', 'original price', 'org price']
+    ttlOrgPrice: ['ttl org price', 'original price', 'org price'],
+    shopCategory: ['shop category', 'shopcategory', 'store category', 'store type', 'xf_shopcategory']
 };
 
 // Find column name in data
@@ -148,6 +149,7 @@ function analyzePromotions(data) {
         const amtSold = parseFloat(row[cols.amtSold]) || 0;
         const promLess = parseFloat(row[cols.promLess]) || 0;
         const orgPrice = parseFloat(row[cols.ttlOrgPrice]) || 0;
+        const txDate = parseDate(row[cols.txDate]);
         
         if (!promoId) return;
         
@@ -172,7 +174,10 @@ function analyzePromotions(data) {
                 qtySold: 0,
                 revenue: 0,
                 discount: 0,
-                originalPrice: 0
+                originalPrice: 0,
+                startDate: null,
+                endDate: null,
+                dates: []
             });
         }
         
@@ -191,6 +196,11 @@ function analyzePromotions(data) {
         promo.revenue += amtSold;
         promo.discount += promLess;
         promo.originalPrice += orgPrice;
+        
+        // Track promotion dates
+        if (txDate) {
+            promo.dates.push(txDate);
+        }
         
         // Track store performance per promotion
         const storeKey = `${promoId}|${storeCode}`;
@@ -214,13 +224,32 @@ function analyzePromotions(data) {
     storeData = Array.from(storeMap.values());
     
     // Convert to array and calculate metrics
-    promotionData = Array.from(promotionMap.values()).map(promo => ({
-        ...promo,
-        newMemberCount: promo.newMembers.size,
-        existingMemberCount: promo.existingMembers.size,
-        totalCustomers: promo.newMembers.size + promo.existingMembers.size,
-        discountPercent: promo.originalPrice > 0 ? (promo.discount / promo.originalPrice * 100) : 0
-    }));
+    promotionData = Array.from(promotionMap.values()).map(promo => {
+        // Calculate promotion period from dates
+        let startDate = null;
+        let endDate = null;
+        let periodDays = 0;
+        
+        if (promo.dates.length > 0) {
+            const sortedDates = promo.dates.sort((a, b) => a - b);
+            startDate = sortedDates[0];
+            endDate = sortedDates[sortedDates.length - 1];
+            periodDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+        }
+        
+        return {
+            ...promo,
+            newMemberCount: promo.newMembers.size,
+            existingMemberCount: promo.existingMembers.size,
+            totalCustomers: promo.newMembers.size + promo.existingMembers.size,
+            discountPercent: promo.originalPrice > 0 ? (promo.discount / promo.originalPrice * 100) : 0,
+            startDate: startDate,
+            endDate: endDate,
+            periodDays: periodDays,
+            startDateStr: startDate ? startDate.toLocaleDateString() : '',
+            endDateStr: endDate ? endDate.toLocaleDateString() : ''
+        };
+    });
     
     // Sort by revenue descending
     promotionData.sort((a, b) => b.revenue - a.revenue);
@@ -498,6 +527,9 @@ function populateTable(data) {
         row.innerHTML = `
             <td>${promo.promotionId}</td>
             <td>${promo.description}</td>
+            <td class="number">${promo.startDateStr}</td>
+            <td class="number">${promo.endDateStr}</td>
+            <td class="number">${promo.periodDays}</td>
             <td class="number">${promo.newMemberCount}</td>
             <td class="number">${promo.existingMemberCount}</td>
             <td class="number">${promo.totalCustomers}</td>
@@ -527,32 +559,58 @@ async function processBaseline() {
         return;
     }
 
-    document.getElementById('baselineStatus').textContent = 'Processing baseline data...';
+    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    document.getElementById('baselineStatus').textContent = `Processing baseline data (${fileSizeMB} MB)...`;
     
     try {
+        // For very large files, warn user
+        if (file.size > 50 * 1024 * 1024) { // > 50MB
+            const proceed = confirm(`This file is ${fileSizeMB} MB. Processing may take a while and could crash the browser. Continue?`);
+            if (!proceed) {
+                document.getElementById('baselineStatus').textContent = 'Processing cancelled';
+                return;
+            }
+        }
+        
         const data = await readFile(file);
         
         if (!data || data.length === 0) {
             throw new Error('No data found in file');
         }
         
-        baselineData = data;
-        
         console.log('Baseline data loaded:', data.length, 'records');
-        console.log('Sample record:', data[0]);
+        
+        // For very large datasets, only keep first 100k records and warn user
+        if (data.length > 100000) {
+            const useAll = confirm(`File contains ${data.length.toLocaleString()} records. This may cause browser crashes.\n\nClick OK to use only first 100,000 records (recommended)\nClick Cancel to try using all data (may crash)`);
+            
+            if (useAll) {
+                baselineData = data;
+            } else {
+                baselineData = data.slice(0, 100000);
+                document.getElementById('baselineStatus').textContent = `Using first 100,000 of ${data.length.toLocaleString()} records`;
+            }
+        } else {
+            baselineData = data;
+        }
         
         document.getElementById('baselineConfig').style.display = 'block';
-        document.getElementById('baselineStatus').textContent = `Baseline data loaded: ${data.length} records`;
+        document.getElementById('baselineStatus').textContent = `Baseline data loaded: ${baselineData.length.toLocaleString()} records`;
         
         // Auto-populate date range if possible
-        const headers = Object.keys(data[0]);
+        const headers = Object.keys(baselineData[0]);
         const txDateCol = findColumn(headers, columnMappings.txDate);
         
-        console.log('Found date column:', txDateCol);
-        
         if (txDateCol) {
-            const dates = data.map(row => parseDate(row[txDateCol])).filter(d => d);
-            console.log('Parsed dates:', dates.length);
+            // Sample dates instead of parsing all for large files
+            const sampleSize = Math.min(1000, baselineData.length);
+            const step = Math.max(1, Math.floor(baselineData.length / sampleSize));
+            const dates = [];
+            
+            for (let i = 0; i < baselineData.length; i += step) {
+                const date = parseDate(baselineData[i][txDateCol]);
+                if (date) dates.push(date);
+            }
             
             if (dates.length > 0) {
                 const minDate = new Date(Math.min(...dates));
@@ -564,7 +622,7 @@ async function processBaseline() {
                 document.getElementById('baselineInfo').textContent = `Baseline period: ${daysDiff} days (${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()})`;
             }
         } else {
-            document.getElementById('baselineInfo').textContent = 'Date column not found. Available columns: ' + headers.join(', ');
+            document.getElementById('baselineInfo').textContent = 'Date column not found. Available columns: ' + headers.slice(0, 10).join(', ');
         }
     } catch (error) {
         console.error('Error processing baseline file:', error);
@@ -617,6 +675,11 @@ function calculateExtraSales() {
         return;
     }
     
+    if (promotionSKUs.size === 0) {
+        alert('No SKUs found in promotion data. Please ensure promotion data includes SKU/PLU information.');
+        return;
+    }
+    
     const startDate = new Date(document.getElementById('baselineStartDate').value);
     const endDate = new Date(document.getElementById('baselineEndDate').value);
     
@@ -625,28 +688,53 @@ function calculateExtraSales() {
         return;
     }
     
+    // Get selected shop categories
+    const shopCategorySelect = document.getElementById('shopCategoryFilter');
+    const selectedCategories = Array.from(shopCategorySelect.selectedOptions).map(option => option.value);
+    
+    if (selectedCategories.length === 0) {
+        alert('Please select at least one shop category');
+        return;
+    }
+    
+    document.getElementById('baselineInfo').textContent = 'Calculating extra sales...';
+    
     // Get baseline data headers
     const headers = Object.keys(baselineData[0]);
     const cols = {
         txDate: findColumn(headers, columnMappings.txDate),
         pluStyle: findColumn(headers, columnMappings.pluStyle),
         qtySold: findColumn(headers, columnMappings.qtySold),
-        amtSold: findColumn(headers, columnMappings.amtSold)
+        amtSold: findColumn(headers, columnMappings.amtSold),
+        shopCategory: findColumn(headers, columnMappings.shopCategory)
     };
+    
+    console.log('Calculating baseline for', promotionSKUs.size, 'SKUs');
+    console.log('Selected shop categories:', selectedCategories);
     
     // Calculate baseline revenue for promotion SKUs
     let baselineRevenue = 0;
     let baselineDays = 0;
+    let matchedRecords = 0;
     
     baselineData.forEach(row => {
         const txDate = parseDate(row[cols.txDate]);
         const pluStyle = row[cols.pluStyle];
         const amtSold = parseFloat(row[cols.amtSold]) || 0;
+        const shopCategory = row[cols.shopCategory] ? row[cols.shopCategory].toString().trim().toUpperCase() : '';
         
-        if (txDate && txDate >= startDate && txDate <= endDate && promotionSKUs.has(pluStyle)) {
+        // Check if record matches all criteria: date range, SKU, and shop category
+        const dateMatch = txDate && txDate >= startDate && txDate <= endDate;
+        const skuMatch = promotionSKUs.has(pluStyle);
+        const categoryMatch = !cols.shopCategory || selectedCategories.includes(shopCategory);
+        
+        if (dateMatch && skuMatch && categoryMatch) {
             baselineRevenue += amtSold;
+            matchedRecords++;
         }
     });
+    
+    console.log('Matched baseline records:', matchedRecords);
     
     baselineDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
     
@@ -666,33 +754,31 @@ function calculateExtraSales() {
         promoDays = Math.ceil((maxPromoDate - minPromoDate) / (1000 * 60 * 60 * 24)) + 1;
     }
     
-    // Calculate daily baseline and scale to promotion period
+    // Calculate daily baseline
     const dailyBaseline = baselineDays > 0 ? baselineRevenue / baselineDays : 0;
-    const scaledBaseline = dailyBaseline * promoDays;
     
-    // Get total promotion revenue
-    const promoRevenue = promotionData.reduce((sum, p) => sum + p.revenue, 0);
-    
-    // Calculate extra sales
-    const extraSales = promoRevenue - scaledBaseline;
-    const uplift = scaledBaseline > 0 ? ((extraSales / scaledBaseline) * 100) : 0;
-    
-    // Calculate extra sales by promotion
+    // Calculate extra sales by promotion first (this gives us accurate individual calculations)
     const extraSalesByPromo = calculateExtraSalesByPromotion(startDate, endDate, baselineDays, promoDays, dailyBaseline, cols);
     
-    // Display results
+    // Sum up the results from individual promotions for accurate totals
+    const totalPromoRevenue = extraSalesByPromo.reduce((sum, p) => sum + p.revenue, 0);
+    const totalBaselineRevenue = extraSalesByPromo.reduce((sum, p) => sum + p.baselineRevenue, 0);
+    const totalExtraSales = extraSalesByPromo.reduce((sum, p) => sum + p.extraSales, 0);
+    const totalUplift = totalBaselineRevenue > 0 ? ((totalExtraSales / totalBaselineRevenue) * 100) : 0;
+    
+    // Display results using the summed individual calculations
     document.getElementById('extraSalesSection').style.display = 'block';
-    document.getElementById('extraSales').textContent = '$' + extraSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    document.getElementById('promoRevenue').textContent = '$' + promoRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    document.getElementById('baselineRevenue').textContent = '$' + scaledBaseline.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    document.getElementById('upliftPercent').textContent = uplift.toFixed(1) + '%';
+    document.getElementById('extraSales').textContent = '$' + totalExtraSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    document.getElementById('promoRevenue').textContent = '$' + totalPromoRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    document.getElementById('baselineRevenue').textContent = '$' + totalBaselineRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    document.getElementById('upliftPercent').textContent = totalUplift.toFixed(1) + '%';
     
     // Update baseline info
     document.getElementById('baselineInfo').innerHTML = `
         <strong>Baseline Period:</strong> ${baselineDays} days (${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()})<br>
-        <strong>Promotion Period:</strong> ${promoDays} days<br>
+        <strong>Promotions:</strong> ${extraSalesByPromo.length} promotions<br>
         <strong>Daily Baseline:</strong> $${dailyBaseline.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>
-        <strong>Scaled Baseline:</strong> $${scaledBaseline.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${promoDays} days)
+        <strong>Total Baseline (scaled):</strong> $${totalBaselineRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
     `;
     
     // Populate extra sales by promotion table
@@ -702,28 +788,127 @@ function calculateExtraSales() {
 function calculateExtraSalesByPromotion(startDate, endDate, baselineDays, promoDays, dailyBaseline, baselineCols) {
     const promoExtraSales = [];
     
+    console.log('Starting extra sales calculation for', promotionData.length, 'promotions');
+    console.log('Baseline data size:', baselineData.length);
+    
+    // Pre-filter baseline data by date range and SKUs to reduce memory
+    console.log('Filtering baseline data...');
+    const filteredBaseline = [];
+    
+    // Process in chunks to avoid memory issues
+    const chunkSize = 10000;
+    for (let i = 0; i < baselineData.length; i += chunkSize) {
+        const chunk = baselineData.slice(i, i + chunkSize);
+        
+        chunk.forEach(row => {
+            const txDate = parseDate(row[baselineCols.txDate]);
+            const pluStyle = row[baselineCols.pluStyle];
+            
+            if (txDate && txDate >= startDate && txDate <= endDate && promotionSKUs.has(pluStyle)) {
+                filteredBaseline.push({
+                    pluStyle: pluStyle,
+                    amtSold: parseFloat(row[baselineCols.amtSold]) || 0,
+                    qtySold: parseFloat(row[baselineCols.qtySold]) || 0
+                });
+            }
+        });
+        
+        // Show progress for large files
+        if (i % 50000 === 0 && i > 0) {
+            console.log(`Processed ${i.toLocaleString()} / ${baselineData.length.toLocaleString()} records`);
+        }
+    }
+    
+    console.log('Filtered baseline records:', filteredBaseline.length);
+    
     promotionData.forEach(promo => {
         const promoSKUs = promotionSKUMap.get(promo.promotionId) || new Set();
+        
+        // Calculate individual promotion period length
+        const individualPromoDays = promo.periodDays || 1; // Use the promotion's own period
+        
+        if (promoSKUs.size === 0) {
+            promoExtraSales.push({
+                promotionId: promo.promotionId,
+                description: promo.description,
+                promoPeriodDays: individualPromoDays,
+                qtySold: promo.qtySold,
+                baselineQty: 0,
+                extraQty: promo.qtySold,
+                revenue: promo.revenue,
+                baselineRevenue: 0,
+                extraSales: promo.revenue,
+                uplift: 0,
+                discount: promo.discount,
+                roi: promo.discount > 0 ? ((promo.revenue / promo.discount) * 100) : 0
+            });
+            return;
+        }
         
         // Calculate baseline revenue and quantity for this promotion's SKUs
         let promoBaselineRevenue = 0;
         let promoBaselineQty = 0;
+        let skuContributions = new Map();
         
-        baselineData.forEach(row => {
-            const txDate = parseDate(row[baselineCols.txDate]);
-            const pluStyle = row[baselineCols.pluStyle];
-            const amtSold = parseFloat(row[baselineCols.amtSold]) || 0;
-            const qtySold = parseFloat(row[baselineCols.qtySold]) || 0;
-            
-            if (txDate && txDate >= startDate && txDate <= endDate && promoSKUs.has(pluStyle)) {
-                promoBaselineRevenue += amtSold;
-                promoBaselineQty += qtySold;
+        filteredBaseline.forEach(row => {
+            if (promoSKUs.has(row.pluStyle)) {
+                promoBaselineRevenue += row.amtSold;
+                promoBaselineQty += row.qtySold;
+                
+                // Track SKU contributions for debugging
+                if (!skuContributions.has(row.pluStyle)) {
+                    skuContributions.set(row.pluStyle, { revenue: 0, qty: 0, records: 0 });
+                }
+                const sku = skuContributions.get(row.pluStyle);
+                sku.revenue += row.amtSold;
+                sku.qty += row.qtySold;
+                sku.records += 1;
             }
         });
         
-        // Scale baseline to promotion period
-        const promoScaledBaseline = baselineDays > 0 ? (promoBaselineRevenue / baselineDays) * promoDays : 0;
-        const promoScaledBaselineQty = baselineDays > 0 ? (promoBaselineQty / baselineDays) * promoDays : 0;
+        // Debug SKU contributions for specific promotions
+        if ((promo.promotionId === 'PEWHOUSE00003221' || promo.promotionId === 'PEWHOUSE00003189') && skuContributions.size > 0) {
+            console.log(`\nSKU Baseline Contributions for ${promo.promotionId}:`);
+            const sortedSKUs = Array.from(skuContributions.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
+            sortedSKUs.slice(0, 10).forEach(([sku, data]) => {
+                console.log(`  ${sku}: $${data.revenue.toFixed(2)} (${data.records} records, ${data.qty} qty)`);
+            });
+            if (sortedSKUs.length > 10) {
+                console.log(`  ... and ${sortedSKUs.length - 10} more SKUs`);
+            }
+        }
+        
+        // Scale baseline to THIS promotion's specific period length
+        const promoScaledBaseline = baselineDays > 0 ? (promoBaselineRevenue / baselineDays) * individualPromoDays : 0;
+        const promoScaledBaselineQty = baselineDays > 0 ? (promoBaselineQty / baselineDays) * individualPromoDays : 0;
+        
+        // Enhanced debug logging for specific promotions
+        if (promo.promotionId === 'PEWHOUSE00003221' || promo.promotionId === 'PEWHOUSE00003189') {
+            console.log(`\n=== DEBUG: ${promo.promotionId} ===`);
+            console.log(`Promotion Period: ${individualPromoDays} days`);
+            console.log(`Baseline Period: ${baselineDays} days`);
+            console.log(`SKUs in this promotion: ${promoSKUs.size}`);
+            console.log(`Raw baseline revenue (${baselineDays} days): $${promoBaselineRevenue.toFixed(2)}`);
+            console.log(`Daily baseline: $${(promoBaselineRevenue / baselineDays).toFixed(2)}`);
+            console.log(`Scaled baseline (${individualPromoDays} days): $${promoScaledBaseline.toFixed(2)}`);
+            console.log(`Actual promotion revenue: $${promo.revenue.toFixed(2)}`);
+            console.log(`Extra sales: $${(promo.revenue - promoScaledBaseline).toFixed(2)}`);
+            
+            // Check if baseline period is much longer than promotion period
+            const periodRatio = baselineDays / individualPromoDays;
+            if (periodRatio > 3) {
+                console.warn(`⚠️ WARNING: Baseline period (${baselineDays} days) is ${periodRatio.toFixed(1)}x longer than promotion period (${individualPromoDays} days)`);
+                console.warn(`This may indicate the baseline period includes seasonal peaks or other promotions`);
+            }
+            
+            // Check if baseline revenue per day is unusually high
+            const dailyBaseline = promoBaselineRevenue / baselineDays;
+            const dailyPromo = promo.revenue / individualPromoDays;
+            if (dailyBaseline > dailyPromo * 1.5) {
+                console.warn(`⚠️ WARNING: Daily baseline ($${dailyBaseline.toFixed(2)}) is ${(dailyBaseline/dailyPromo).toFixed(1)}x higher than daily promotion revenue ($${dailyPromo.toFixed(2)})`);
+                console.warn(`This suggests the baseline period may not represent normal sales patterns`);
+            }
+        }
         
         // Calculate extra sales for this promotion
         const promoExtraSalesValue = promo.revenue - promoScaledBaseline;
@@ -734,6 +919,7 @@ function calculateExtraSalesByPromotion(startDate, endDate, baselineDays, promoD
         promoExtraSales.push({
             promotionId: promo.promotionId,
             description: promo.description,
+            promoPeriodDays: individualPromoDays,
             qtySold: promo.qtySold,
             baselineQty: promoScaledBaselineQty,
             extraQty: promoExtraQty,
@@ -746,7 +932,6 @@ function calculateExtraSalesByPromotion(startDate, endDate, baselineDays, promoD
         });
     });
     
-    // Sort by extra sales descending
     promoExtraSales.sort((a, b) => b.extraSales - a.extraSales);
     
     return promoExtraSales;
@@ -764,6 +949,7 @@ function populateExtraSalesTable(data) {
         row.innerHTML = `
             <td>${promo.promotionId}</td>
             <td>${promo.description}</td>
+            <td class="number">${promo.promoPeriodDays || 'N/A'}</td>
             <td class="number">${promo.qtySold.toLocaleString()}</td>
             <td class="number">${promo.baselineQty.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
             <td class="number ${extraQtyClass}">${promo.extraQty.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
@@ -780,6 +966,9 @@ function exportToExcel() {
     const exportData = promotionData.map(promo => ({
         'Promotion ID': promo.promotionId,
         'Description': promo.description,
+        'Start Date': promo.startDateStr,
+        'End Date': promo.endDateStr,
+        'Period (Days)': promo.periodDays,
         'New Members': promo.newMemberCount,
         'Existing Members': promo.existingMemberCount,
         'Total Customers': promo.totalCustomers,
