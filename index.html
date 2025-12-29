@@ -46,6 +46,15 @@
                         <label for="baselineEndDate">Baseline End Date:</label>
                         <input type="date" id="baselineEndDate" />
                     </div>
+                    <div class="config-group">
+                        <label for="shopCategoryFilter">Shop Category Filter:</label>
+                        <select id="shopCategoryFilter" multiple>
+                            <option value="PHYSICAL" selected>PHYSICAL</option>
+                            <option value="FRANCHISE" selected>FRANCHISE</option>
+                            <option value="UM" selected>UM</option>
+                        </select>
+                        <small>Hold Ctrl/Cmd to select multiple categories</small>
+                    </div>
                     <button id="calculateExtraSalesBtn">Calculate Extra Sales</button>
                 </div>
                 <div id="baselineInfo" class="baseline-info"></div>
@@ -99,6 +108,7 @@
                                 <tr>
                                     <th>Promotion ID</th>
                                     <th>Description</th>
+                                    <th>Period (Days)</th>
                                     <th>Promo Qty</th>
                                     <th>Baseline Qty</th>
                                     <th>Extra Qty</th>
@@ -151,6 +161,9 @@
                             <tr>
                                 <th>Promotion ID</th>
                                 <th>Description</th>
+                                <th>Start Date</th>
+                                <th>End Date</th>
+                                <th>Period (Days)</th>
                                 <th>New Members</th>
                                 <th>Existing Members</th>
                                 <th>Total Customers</th>
